@@ -13,6 +13,12 @@ from tqdm import tqdm
 import adda
 
 
+## visualize before discriminator
+import pandas as pd
+from sklearn.manifold import TSNE
+import matplotlib.pyplot as plt
+import seaborn as sns
+
 @click.command()
 @click.argument('source')
 @click.argument('target')
@@ -93,13 +99,13 @@ def main(source, target, model, output,
     target_adversary_label = tf.ones([tf.shape(target_ft)[0]], tf.int32)
     adversary_label = tf.concat(
         [source_adversary_label, target_adversary_label], 0)
-    adversary_logits = adda.adversary.adversarial_discriminator(
+    adversary_logits = adda.adversary.adversarial_discriminator( ## discriminator on whether the input from source or target
         adversary_ft, adversary_layers, leaky=adversary_leaky)
 
     # losses
-    mapping_loss = tf.losses.sparse_softmax_cross_entropy(
+    mapping_loss = tf.losses.sparse_softmax_cross_entropy( ## mapping loss: treat two domains equally
         1 - adversary_label, adversary_logits)
-    adversary_loss = tf.losses.sparse_softmax_cross_entropy(
+    adversary_loss = tf.losses.sparse_softmax_cross_entropy(  ## discriminator loss
         adversary_label, adversary_logits)
 
     # variable collection
@@ -139,7 +145,7 @@ def main(source, target, model, output,
     for src, tgt in target_vars.items():
         logging.info('        {:30} -> {:30}'.format(src, tgt.name))
     target_restorer = tf.train.Saver(var_list=target_vars)
-    target_restorer.restore(sess, weights)
+    target_restorer.restore(sess, weights)  ## weights same as source
 
     # optimization loop (finally)
     output_dir = os.path.join('snapshot', output)
@@ -151,8 +157,9 @@ def main(source, target, model, output,
     bar.set_description('{} (lr: {:.0e})'.format(output, lr))
     bar.refresh()
     for i in bar:
-        mapping_loss_val, adversary_loss_val, _, _ = sess.run(
-            [mapping_loss, adversary_loss, mapping_step, adversary_step])
+        ## extract soure/target data before discriminator with batch_size * n_clusters
+        mapping_loss_val, adversary_loss_val, _, _, source_output, target_output, source_label, target_label = sess.run(
+            [mapping_loss, adversary_loss, mapping_step, adversary_step, source_ft, target_ft, source_label_batch, target_label_batch])
         mapping_losses.append(mapping_loss_val)
         adversary_losses.append(adversary_loss_val)
         if i % display == 0:
@@ -163,6 +170,19 @@ def main(source, target, model, output,
                                 np.mean(mapping_losses),
                                 adversary_loss_val,
                                 np.mean(adversary_losses)))
+
+            combined_df = pd.DataFrame(data=np.concatenate((source_output, target_output)))
+            tsne = TSNE(n_components=2, verbose=1)
+            tsne_results = tsne.fit_transform(combined_df)
+            combined_df['tSNE1'], combined_df['tSNE2'] = tsne_results[:,0], tsne_results[:,1]
+            combined_df['label'] = np.concatenate((source_label, target_label))
+            combined_df['dataset'] = ['source'] * source_label.shape[0] + ['target'] * target_label.shape[0]
+            plt.figure(figsize=(16, 9))
+            sns.scatterplot(x="tSNE1", y='tSNE2', hue="label", style="dataset",
+                    palette=sns.color_palette("hls", len(set(combined_df['label']))),
+                    data=combined_df, legend="full")
+            plt.savefig(output_dir+os.sep+'images'+os.sep+'tSNE_{}.png'.format(i))
+
         if stepsize is not None and (i + 1) % stepsize == 0:
             lr = sess.run(lr_var.assign(lr * 0.1))
             logging.info('Changed learning rate to {:.0e}'.format(lr))

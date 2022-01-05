@@ -61,6 +61,7 @@ class PBMC(DatasetGroup):
                                  label_shape=self.label_shape,
                                  shuffle=self.shuffle,
                                  n_clusters=self.n_clusters)
+        self.label_enc = label_enc
 
     def _read_data_and_labels(self, data_path, label_path, label_enc=None, label_col="cell.type"):
         """Read PBMC data and labels."""
